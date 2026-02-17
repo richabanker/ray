@@ -66,10 +66,10 @@ const NodeDetailPage = () => {
           />
           <Tab
             value="actor"
-            label={`Actor (${
-              Object.values(nodeDetail?.actors || {}).length || 0
-            })`}
+            label={`Actor (${Object.values(nodeDetail?.actors || {}).length || 0
+              })`}
           />
+          <Tab value="infrastructure" label="Infrastructure" />
         </Tabs>
         {nodeDetail && selectedTab === "info" && (
           <Box sx={{ padding: 2, marginTop: 2, marginBottom: 2 }}>
@@ -236,6 +236,108 @@ const NodeDetailPage = () => {
               />
             </TableContainer>
           </React.Fragment>
+        )}
+        {nodeDetail && selectedTab === "infrastructure" && (
+          <Box sx={{ padding: 2, marginTop: 2, marginBottom: 2 }}>
+            {nodeDetail.infrastructure ? (
+              <>
+                <Grid container spacing={2}>
+                  <Grid item xs={12}>
+                    <Box sx={{ fontWeight: "bold", fontSize: "1.2em", marginBottom: 2 }}>
+                      Platform Information
+                    </Box>
+                  </Grid>
+                </Grid>
+                <Grid container spacing={2}>
+                  <Grid item xs={6}>
+                    <Box sx={{ fontWeight: "bold" }}>Platform Type</Box>
+                    <Box sx={{ textTransform: "capitalize" }}>
+                      {nodeDetail.infrastructure?.platform?.platformType?.replace('_', ' ') || 'Unknown'}
+                    </Box>
+                  </Grid>
+                </Grid>
+
+                {((nodeDetail.infrastructure?.platform?.platformType === "kubernetes")) &&
+                  (nodeDetail.infrastructure?.platformDetails) && (
+                    <>
+                      <Grid container spacing={2} sx={{ marginTop: 2 }}>
+                        <Grid item xs={12}>
+                          <Box sx={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: 1 }}>
+                            Kubernetes Information
+                          </Box>
+                        </Grid>
+                      </Grid>
+                      <Grid container spacing={2}>
+                        <Grid item xs={6}>
+                          <Box sx={{ fontWeight: "bold" }}>Pod Name</Box>
+                          <Box>{(nodeDetail.infrastructure?.platformDetails?.podName) || 'Unknown'}</Box>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Box sx={{ fontWeight: "bold" }}>Namespace</Box>
+                          <Box>{(nodeDetail.infrastructure?.platformDetails?.namespace) || 'default'}</Box>
+                        </Grid>
+                      </Grid>
+                      {((nodeDetail.infrastructure?.platformDetails?.nodeName)) && (
+                        <Grid container spacing={2} sx={{ marginTop: 1 }}>
+                          <Grid item xs={6}>
+                            <Box sx={{ fontWeight: "bold" }}>Kubernetes Node</Box>
+                            <Box>{(nodeDetail.infrastructure?.platformDetails?.nodeName)}</Box>
+                          </Grid>
+                          <Grid item xs={6}>
+                            <Box sx={{ fontWeight: "bold" }}>Service Account</Box>
+                            <Box>{(nodeDetail.infrastructure?.platformDetails?.serviceAccount) || "default"}</Box>
+                          </Grid>
+                        </Grid>
+                      )}
+                    </>
+                  )}
+
+                {((nodeDetail.infrastructure?.platform?.platformType === "container")) &&
+                  (nodeDetail.infrastructure?.platformDetails) && (
+                    <>
+                      <Grid container spacing={2} sx={{ marginTop: 2 }}>
+                        <Grid item xs={12}>
+                          <Box sx={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: 1 }}>
+                            Container Information
+                          </Box>
+                        </Grid>
+                      </Grid>
+                      <Grid container spacing={2}>
+                        <Grid item xs={6}>
+                          <Box sx={{ fontWeight: "bold" }}>Container ID</Box>
+                          <Box>{(
+                            nodeDetail.infrastructure?.platformDetails?.containerId) || "Unknown"}</Box>
+                        </Grid>
+                        <Grid item xs={6}>
+                          <Box sx={{ fontWeight: "bold" }}>Cgroup Version</Box>
+                          <Box>{(
+                            nodeDetail.infrastructure?.platformDetails?.cgroupInfo?.cgroupVersion) || "Unknown"}</Box>
+                        </Grid>
+                      </Grid>
+                    </>
+                  )}
+
+                {nodeDetail.infrastructure.error && (
+                  <Grid container spacing={2} sx={{ marginTop: 2 }}>
+                    <Grid item xs={12}>
+                      <Box sx={{ fontWeight: "bold", color: "error.main" }}>
+                        Detection Error
+                      </Box>
+                      <Box sx={{ color: "error.main" }}>
+                        {nodeDetail.infrastructure.error}
+                      </Box>
+                    </Grid>
+                  </Grid>
+                )}
+              </>
+            ) : (
+              <Box sx={{ textAlign: "center", color: "text.secondary", padding: 4 }}>
+                No infrastructure information available.
+                <br />
+                This feature requires Ray 2.x+ and may not be supported on all platforms.
+              </Box>
+            )}
+          </Box>
         )}
       </TitleCard>
     </Box>

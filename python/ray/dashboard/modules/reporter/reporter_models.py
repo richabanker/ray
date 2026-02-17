@@ -178,6 +178,8 @@ if PYDANTIC_INSTALLED:
         networkSpeed: NetworkSpeed  # (sendSpeed, receiveSpeed) in bytes/sec
         cmdline: List[str]  # deprecated field from raylet
         gcs: Optional[ProcessInfo] = None  # only present on head node
+        # Infrastructure information for troubleshooting K8s issues
+        infrastructure: Optional[dict] = None
 
 else:
     StatsPayload = None

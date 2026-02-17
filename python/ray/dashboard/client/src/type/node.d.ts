@@ -36,6 +36,18 @@ export type NodeDetail = {
   cmdline: string[];
   state: string;
   logicalResources?: str;
+  infrastructure?: InfrastructureInfo;
+};
+
+export type InfrastructureInfo = {
+  platform: {
+    platformType: string;
+    platformVersion?: string | null;
+    details: { [key: string]: any };
+  };
+  platformDetails?: { [key: string]: any };
+  hostname: string;
+  error?: string;
 };
 
 // Example:
