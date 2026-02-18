@@ -66,10 +66,10 @@ const NodeDetailPage = () => {
           />
           <Tab
             value="actor"
-            label={`Actor (${
-              Object.values(nodeDetail?.actors || {}).length || 0
-            })`}
+            label={`Actor (${Object.values(nodeDetail?.actors || {}).length || 0
+              })`}
           />
+          <Tab value="infrastructure" label="Infrastructure" />
         </Tabs>
         {nodeDetail && selectedTab === "info" && (
           <Box sx={{ padding: 2, marginTop: 2, marginBottom: 2 }}>
@@ -236,6 +236,77 @@ const NodeDetailPage = () => {
               />
             </TableContainer>
           </React.Fragment>
+        )}
+        {nodeDetail && selectedTab === "infrastructure" && (
+          <Box sx={{ padding: 2, marginTop: 2, marginBottom: 2 }}>
+            {nodeDetail.infrastructure ? (
+              <React.Fragment>
+                {(nodeDetail.infrastructure && Object.keys(nodeDetail.infrastructure).length > 0) && (
+                  <React.Fragment>
+                    <Grid container spacing={2}>
+                      <Grid item xs={12}>
+                        <Box sx={{ fontWeight: "bold", fontSize: "1.2em", marginBottom: 2 }}>
+                          Platform Information
+                        </Box>
+                      </Grid>
+                    </Grid>
+                    {nodeDetail.infrastructure.platformType && (
+                      <Grid container spacing={2}>
+                        <Grid item xs={6}>
+                          <Box sx={{ fontWeight: "bold" }}>Platform Type</Box>
+                          <Box sx={{ textTransform: "capitalize" }}>
+                            {String(nodeDetail.infrastructure.platformType).replace('_', ' ')}
+                          </Box>
+                        </Grid>
+                      </Grid>
+                    )}
+
+                    <Grid container spacing={2} sx={{ marginTop: 2 }}>
+                      <Grid item xs={12}>
+                        <Box sx={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: 1 }}>
+                          {nodeDetail.infrastructure.platformType
+                            ? `${String(nodeDetail.infrastructure.platformType).charAt(0).toUpperCase() + String(nodeDetail.infrastructure.platformType).slice(1)} Information`
+                            : "Injected Platform Metadata"}
+                        </Box>
+                      </Grid>
+                    </Grid>
+                    <Grid container spacing={2}>
+                      {Object.entries(nodeDetail.infrastructure)
+                        .filter(([key]) => key !== 'platformType' && key !== 'error')
+                        .map(([key, value]) => (
+                          <Grid item xs={6} key={key}>
+                            <Box sx={{ fontWeight: "bold", textTransform: "capitalize" }}>
+                              {key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
+                            </Box>
+                            <Box>{String(value)}</Box>
+                        </Grid>
+                        ))}
+                    </Grid>
+                  </React.Fragment>
+                )}
+
+
+                {nodeDetail.infrastructure.error && (
+                  <Grid container spacing={2} sx={{ marginTop: 2 }}>
+                    <Grid item xs={12}>
+                      <Box sx={{ fontWeight: "bold", color: "error.main" }}>
+                        Detection Error
+                      </Box>
+                      <Box sx={{ color: "error.main" }}>
+                        {nodeDetail.infrastructure.error}
+                      </Box>
+                    </Grid>
+                  </Grid>
+                )}
+              </React.Fragment>
+            ) : (
+              <Box sx={{ textAlign: "center", color: "text.secondary", padding: 4 }}>
+                No infrastructure information available.
+                <br />
+                This feature requires Ray 2.x+ and may not be supported on all platforms.
+              </Box>
+            )}
+          </Box>
         )}
       </TitleCard>
     </Box>

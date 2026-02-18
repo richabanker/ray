@@ -36,6 +36,12 @@ export type NodeDetail = {
   cmdline: string[];
   state: string;
   logicalResources?: str;
+  infrastructure?: InfrastructureInfo;
+};
+
+export type InfrastructureInfo = {
+  // Generic key-value map injected from RAY_INFRASTRUCTURE_TAGS
+  [key: string]: any;
 };
 
 // Example:

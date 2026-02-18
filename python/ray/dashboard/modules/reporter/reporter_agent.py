@@ -49,6 +49,7 @@ from ray._raylet import (
 )
 from ray.core.generated import reporter_pb2, reporter_pb2_grpc
 from ray.dashboard import k8s_utils
+from ray.dashboard.infrastructure import infrastructure_detector
 from ray.dashboard.consts import (
     CLUSTER_TAG_KEYS,
     COMPONENT_GPU_TAG_KEYS,
@@ -1112,6 +1113,17 @@ class ReporterAgent(
             return None
         return mem.shared
 
+    def _get_infrastructure_info(self):
+        """Collect infrastructure information for troubleshooting."""
+        try:
+            return infrastructure_detector.collect_infrastructure_info()
+        except Exception as e:
+            logger.warning(f"Failed to collect infrastructure information: {e}")
+            return {
+                "platform": {"platform_type": "unknown", "platform_version": None, "details": {}},
+                "error": str(e),
+            }
+
     async def _async_collect_stats(self):
         now = dashboard_utils.to_posix_time(datetime.datetime.utcnow())
         network_stats = self._get_network_stats()
@@ -1124,6 +1136,8 @@ class ReporterAgent(
 
         gpus = self._get_gpu_usage()
         raylet = self._get_raylet()
+        infra_info = self._get_infrastructure_info()
+        
         stats = {
             "now": now,
             "hostname": self._hostname,
@@ -1147,6 +1161,8 @@ class ReporterAgent(
             "network_speed": network_speed_stats,
             # Deprecated field, should be removed with frontend.
             "cmdline": raylet.get("cmdline", []) if raylet else [],
+            # Infrastructure information for troubleshooting
+            "infrastructure": infra_info,
         }
         if self._is_head_node:
             stats["gcs"] = self._get_gcs()
@@ -1857,10 +1873,8 @@ class ReporterAgent(
 
         if StatsPayload is not None:
             stats_dict = dashboard_utils.to_google_style(recursive_asdict(stats))
-
             parsed_stats = StatsPayload.parse_obj(stats_dict)
-            out = json.dumps(parsed_stats.dict())
-            return out
+            return json.dumps(parsed_stats.dict())
         else:
             # NOTE: This converts keys to "Google style", (e.g: "processes_pids" -> "processesPids")
             return jsonify_asdict(stats)
