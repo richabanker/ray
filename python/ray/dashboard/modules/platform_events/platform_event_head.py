@@ -1,3 +1,4 @@
+import asyncio
 import collections
 import logging
 import os
@@ -25,11 +26,11 @@ class PlatformEventsHead(dashboard_utils.DashboardHeadModule):
     @classmethod
     def is_enabled(cls) -> bool:
         is_enabled = os.environ.get(
-            "RAY_DASHBOARD_INGEST_K8S_EVENTS", "False"
+            "RAY_DASHBOARD_INGEST_PLATFORM_EVENTS", "False"
         ).lower() in ("true", "1")
         if not is_enabled:
             logger.info(
-                "Skipping PlatformEventsHead because RAY_DASHBOARD_INGEST_K8S_EVENTS is not enabled."
+                "Skipping PlatformEventsHead because RAY_DASHBOARD_INGEST_PLATFORM_EVENTS is not enabled."
             )
         return is_enabled
 
@@ -48,7 +49,13 @@ class PlatformEventsHead(dashboard_utils.DashboardHeadModule):
                     KubernetesEventProvider,
                 )
 
-                self._provider = KubernetesEventProvider(self._process_event_callback)
+                # Create a thread-safe callback wrapper to delegate event processing back to the main loop
+                loop = asyncio.get_running_loop()
+
+                def thread_safe_callback(ray_event: RayEvent):
+                    loop.call_soon_threadsafe(self._process_event_callback, ray_event)
+
+                self._provider = KubernetesEventProvider(thread_safe_callback)
                 logger.info("Initialized Kubernetes platform event provider.")
                 await self._provider.run()
             except Exception as e:

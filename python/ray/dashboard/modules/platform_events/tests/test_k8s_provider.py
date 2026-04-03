@@ -48,8 +48,6 @@ def _make_k8s_event(
 @pytest.mark.asyncio
 async def test_init_k8s_client_missing_cluster_name():
     provider = KubernetesEventProvider(lambda e: None)
-    # Create dummy loop for run_in_executor setup
-    provider._loop = MagicMock()
     result = await provider._init_k8s_client()
     assert result is False
     assert provider._k8s_v1_api is None

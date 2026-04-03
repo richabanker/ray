@@ -43,7 +43,6 @@ class KubernetesEventProvider(PlatformEventProvider):
         self._k8s_v1_api = None
         self._stop_event = threading.Event()
         self._async_stop_event = asyncio.Event()
-        self._loop = None
         self._active_watches = {}
         self._watches_lock = threading.Lock()
         self._threads = []
@@ -90,7 +89,8 @@ class KubernetesEventProvider(PlatformEventProvider):
         )
         try:
             custom_api = client.CustomObjectsApi()
-            cluster_obj = await self._loop.run_in_executor(
+            loop = asyncio.get_running_loop()
+            cluster_obj = await loop.run_in_executor(
                 None,
                 lambda: custom_api.get_namespaced_custom_object(
                     group="ray.io",
@@ -120,7 +120,6 @@ class KubernetesEventProvider(PlatformEventProvider):
         return True
 
     async def run(self) -> None:
-        self._loop = asyncio.get_running_loop()
         if await self._init_k8s_client():
             # Targets to watch
             targets = [("RayCluster", self._cluster_name)]
@@ -134,18 +133,18 @@ class KubernetesEventProvider(PlatformEventProvider):
                 target_id = f"{kind}/{name}"
                 self._last_resource_versions[target_id] = None
 
-            # Start a dedicated, named OS thread for each target to ensure strict execution guarantees
-            for kind, name in targets:
-                t = threading.Thread(
-                    target=self._run_k8s_watch,
-                    args=(kind, name),
-                    name=f"platform_events_watch_{kind}_{name}",
-                    daemon=True,
-                )
-                t.start()
-                self._threads.append(t)
-
             try:
+                # Start a dedicated, named OS thread for each target to ensure strict execution guarantees
+                for kind, name in targets:
+                    t = threading.Thread(
+                        target=self._run_k8s_watch,
+                        args=(kind, name),
+                        name=f"platform_events_watch_{kind}_{name}",
+                        daemon=True,
+                    )
+                    t.start()
+                    self._threads.append(t)
+
                 # Block the run coroutine until cleanup is called
                 await self._async_stop_event.wait()
             finally:
@@ -189,10 +188,7 @@ class KubernetesEventProvider(PlatformEventProvider):
                         k8s_event_obj = event["object"]
                         rv = k8s_event_obj.metadata.resource_version
                         self._last_resource_versions[target_id] = rv
-                        if self._loop:
-                            self._loop.call_soon_threadsafe(
-                                self._process_k8s_event, k8s_event_obj
-                            )
+                        self._process_k8s_event(k8s_event_obj)
 
                 except ApiException as e:
                     if e.status == 410:
@@ -283,10 +279,14 @@ class KubernetesEventProvider(PlatformEventProvider):
             except Exception as e:
                 logger.warning(f"Error stopping watch: {e}")
 
-        for t in self._threads:
-            try:
-                t.join(timeout=1.0)
-            except Exception as e:
-                logger.warning(f"Error joining thread {t.name}: {e}")
+        loop = asyncio.get_running_loop()
 
+        def join_all_threads():
+            for t in self._threads:
+                try:
+                    t.join(timeout=1.0)
+                except Exception as e:
+                    logger.warning(f"Error joining thread {t.name}: {e}")
+
+        await loop.run_in_executor(None, join_all_threads)
         logger.info("Platform events watcher stopped.")
