@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -20,6 +20,12 @@ except ImportError:
     ApiException = None
 
 logger = logging.getLogger(__name__)
+
+# Keys used in `_last_resource_versions` and `_active_watches` for the two
+# pod-related watches. Existing per-target watches use "<kind>/<name>" keys,
+# but these watches aren't kind-and-name shaped, so they get sentinel keys.
+POD_MEMBERSHIP_WATCH_ID = "Pod/__cluster_members__"
+POD_EVENTS_WATCH_ID = "Event/__cluster_pods__"
 
 
 class KubernetesEventProvider(PlatformEventProvider):
@@ -56,6 +62,12 @@ class KubernetesEventProvider(PlatformEventProvider):
         self._watches_lock: threading.Lock = threading.Lock()
         self._threads: List[threading.Thread] = []
         self._cleaned_up: bool = False
+
+        # Set of pod names belonging to this RayCluster (label ray.io/cluster=<name>).
+        # Maintained by `_run_pod_membership_watch` and read by `_run_pod_events_watch`
+        # to filter namespace-wide pod events down to this cluster's pods.
+        self._cluster_pod_names: Set[str] = set()
+        self._pods_lock: threading.Lock = threading.Lock()
 
     async def _init_k8s_client(self) -> bool:
         if not k8s_config:
@@ -148,6 +160,8 @@ class KubernetesEventProvider(PlatformEventProvider):
             for kind, name in targets:
                 target_id = f"{kind}/{name}"
                 self._last_resource_versions[target_id] = None
+            self._last_resource_versions[POD_MEMBERSHIP_WATCH_ID] = None
+            self._last_resource_versions[POD_EVENTS_WATCH_ID] = None
 
             try:
                 # Start a dedicated, named OS thread for each target to ensure strict execution guarantees
@@ -160,6 +174,30 @@ class KubernetesEventProvider(PlatformEventProvider):
                     )
                     t.start()
                     self._threads.append(t)
+
+                # Pod-membership watcher: must start before the pod-events watcher
+                # so the membership cache has a chance to populate before events
+                # start being filtered against it. The first few events after
+                # startup may be dropped if they arrive before the initial LIST
+                # completes; this is acceptable for v1.
+                pod_thread = threading.Thread(
+                    target=self._run_pod_membership_watch,
+                    name="platform_events_watch_pods",
+                    daemon=True,
+                )
+                pod_thread.start()
+                self._threads.append(pod_thread)
+
+                # Pod-events watcher: namespace-wide event watch filtered
+                # client-side against the membership cache. Single watch
+                # because K8s field selectors don't support set membership.
+                pod_events_thread = threading.Thread(
+                    target=self._run_pod_events_watch,
+                    name="platform_events_watch_pod_events",
+                    daemon=True,
+                )
+                pod_events_thread.start()
+                self._threads.append(pod_events_thread)
 
                 # Block the run coroutine until cleanup is called
                 await self._async_stop_event.wait()
@@ -221,6 +259,131 @@ class KubernetesEventProvider(PlatformEventProvider):
                     logger.error(
                         f"Error watching Kubernetes events for {target_id}: {e}"
                     )
+                    self._stop_event.wait(5)
+        finally:
+            with self._watches_lock:
+                self._active_watches.pop(target_id, None)
+
+    def _update_pod_membership(self, event_type: str, pod_name: str) -> None:
+        """Apply a single pod watch event to the membership cache."""
+        with self._pods_lock:
+            if event_type == "DELETED":
+                self._cluster_pod_names.discard(pod_name)
+            else:
+                self._cluster_pod_names.add(pod_name)
+
+    def _is_cluster_pod(self, pod_name: str) -> bool:
+        with self._pods_lock:
+            return pod_name in self._cluster_pod_names
+
+    def _run_pod_membership_watch(self) -> None:
+        """Maintain the cluster's pod-name set via a label-selected pod watch.
+
+        Filtered by `ray.io/cluster=<cluster_name>` — the canonical KubeRay
+        label, also used by Ray's autoscaler node provider."""
+        if not self._k8s_v1_api or not watch:
+            logger.warning(
+                "Halting pod-membership watcher: "
+                "Kubernetes client or watch library is not initialized."
+            )
+            return
+
+        label_selector = f"ray.io/cluster={self._cluster_name}"
+        logger.info(
+            f"Starting Kubernetes pod-membership watcher (selector: {label_selector})"
+        )
+
+        w = watch.Watch()
+        target_id = POD_MEMBERSHIP_WATCH_ID
+        with self._watches_lock:
+            self._active_watches[target_id] = w
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    stream = w.stream(
+                        self._k8s_v1_api.list_namespaced_pod,
+                        namespace=self._namespace,
+                        label_selector=label_selector,
+                        resource_version=self._last_resource_versions.get(target_id),
+                        timeout_seconds=60,
+                        _request_timeout=70,
+                    )
+                    for event in stream:
+                        pod_obj = event["object"]
+                        self._last_resource_versions[target_id] = (
+                            pod_obj.metadata.resource_version
+                        )
+                        self._update_pod_membership(
+                            event["type"], pod_obj.metadata.name
+                        )
+                except ApiException as e:
+                    if e.status == 410:
+                        logger.warning(
+                            "Resource version expired for pod-membership watch, "
+                            "resetting"
+                        )
+                        self._last_resource_versions[target_id] = None
+                    else:
+                        logger.error(f"Kubernetes API error watching pods: {e}")
+                        self._stop_event.wait(5)
+                except Exception as e:
+                    logger.error(f"Error watching Kubernetes pods: {e}")
+                    self._stop_event.wait(5)
+        finally:
+            with self._watches_lock:
+                self._active_watches.pop(target_id, None)
+
+    def _run_pod_events_watch(self) -> None:
+        """Watch namespace-wide pod events, dropping events for non-cluster pods.
+
+        K8s field selectors don't support set membership across pod names,
+        so we open a single watch scoped to `involvedObject.kind=Pod` and
+        filter client-side against `_cluster_pod_names`."""
+        if not self._k8s_v1_api or not watch:
+            logger.warning(
+                "Halting pod-events watcher: "
+                "Kubernetes client or watch library is not initialized."
+            )
+            return
+
+        logger.info("Starting Kubernetes pod-events watcher")
+
+        w = watch.Watch()
+        target_id = POD_EVENTS_WATCH_ID
+        with self._watches_lock:
+            self._active_watches[target_id] = w
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    stream = w.stream(
+                        self._k8s_v1_api.list_namespaced_event,
+                        namespace=self._namespace,
+                        field_selector="involvedObject.kind=Pod",
+                        resource_version=self._last_resource_versions.get(target_id),
+                        timeout_seconds=60,
+                        _request_timeout=70,
+                    )
+                    for event in stream:
+                        k8s_event_obj = event["object"]
+                        self._last_resource_versions[target_id] = (
+                            k8s_event_obj.metadata.resource_version
+                        )
+                        if self._is_cluster_pod(
+                            k8s_event_obj.involved_object.name
+                        ):
+                            self._process_k8s_event(k8s_event_obj)
+                except ApiException as e:
+                    if e.status == 410:
+                        logger.warning(
+                            "Resource version expired for pod-events watch, "
+                            "resetting"
+                        )
+                        self._last_resource_versions[target_id] = None
+                    else:
+                        logger.error(f"Kubernetes API error watching pod events: {e}")
+                        self._stop_event.wait(5)
+                except Exception as e:
+                    logger.error(f"Error watching Kubernetes pod events: {e}")
                     self._stop_event.wait(5)
         finally:
             with self._watches_lock:

@@ -185,6 +185,60 @@ def test_timestamp_falls_back_to_first_timestamp():
     assert delivered_event.timestamp.seconds == int(ts.timestamp())
 
 
+@pytest.mark.parametrize(
+    "event_type,expected_present",
+    [
+        ("ADDED", True),
+        ("MODIFIED", True),
+        ("DELETED", False),
+    ],
+)
+def test_update_pod_membership(event_type, expected_present):
+    provider = KubernetesEventProvider(lambda e: None)
+    # Seed so DELETED has something to remove.
+    provider._cluster_pod_names.add("ray-worker-0")
+
+    provider._update_pod_membership(event_type, "ray-worker-0")
+
+    assert provider._is_cluster_pod("ray-worker-0") is expected_present
+
+
+def test_update_pod_membership_delete_unknown_is_noop():
+    provider = KubernetesEventProvider(lambda e: None)
+    provider._update_pod_membership("DELETED", "never-added")
+    assert provider._is_cluster_pod("never-added") is False
+
+
+def test_pod_event_dispatched_only_for_cluster_pods():
+    delivered = []
+
+    def callback(event: RayEvent):
+        delivered.append(event)
+
+    provider = KubernetesEventProvider(callback)
+    provider._cluster_name = "my-cluster"
+    provider._update_pod_membership("ADDED", "ray-worker-0")
+
+    # Event for a pod in this cluster — should be delivered.
+    in_cluster_evt = _make_k8s_event(
+        uid="uid-1", kind="Pod", name="ray-worker-0", reason="Scheduled"
+    )
+    if provider._is_cluster_pod(in_cluster_evt.involved_object.name):
+        provider._process_k8s_event(in_cluster_evt)
+
+    # Event for a pod outside this cluster — should be filtered out.
+    other_evt = _make_k8s_event(
+        uid="uid-2", kind="Pod", name="some-other-pod", reason="Scheduled"
+    )
+    if provider._is_cluster_pod(other_evt.involved_object.name):
+        provider._process_k8s_event(other_evt)
+
+    assert len(delivered) == 1
+    assert delivered[0].event_id == b"uid-1"
+    assert delivered[0].platform_event.object_kind == "Pod"
+    assert delivered[0].platform_event.object_name == "ray-worker-0"
+
+
 if __name__ == "__main__":
     import sys
 
